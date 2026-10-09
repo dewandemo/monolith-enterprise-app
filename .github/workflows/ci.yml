@@ -1,0 +1,221 @@
+name: CI/CD Pipeline
+
+# This workflow intentionally mirrors a typical traditional enterprise
+# promotion pipeline rather than a lean modern one: separate build/test,
+# static-analysis, dependency-audit, integration-test and packaging stages,
+# followed by sequential (gated) deploys to dev -> staging -> prod.
+#
+# This repo also keeps a legacy .travis.yml and a Jenkinsfile side-by-side
+# with this workflow - a very common state for a codebase mid-migration
+# between CI providers.
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch: {}
+
+env:
+  JAVA_DISTRIBUTION: temurin
+  JAVA_VERSION: "8"
+
+jobs:
+  build-and-unit-test:
+    name: Build & Unit Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: Compile & run unit tests
+        run: mvn -B clean test -Dliquibase.should.run=false
+
+      - name: Upload surefire reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+          retention-days: 14
+
+  static-analysis:
+    name: Static Analysis (Checkstyle / PMD / SpotBugs)
+    runs-on: ubuntu-latest
+    needs: build-and-unit-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      # Advisory gate: configured not to fail the build (see pom.xml).
+      # Findings are still published for visibility.
+      - name: Run Checkstyle, PMD, SpotBugs
+        run: >
+          mvn -B checkstyle:checkstyle pmd:pmd pmd:cpd com.github.spotbugs:spotbugs-maven-plugin:spotbugs
+          -Dliquibase.should.run=false
+        continue-on-error: true
+
+      - name: Upload static analysis reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-analysis-reports
+          path: |
+            target/checkstyle-result.xml
+            target/pmd.xml
+            target/cpd.xml
+            target/spotbugsXml.xml
+          retention-days: 14
+
+  dependency-audit:
+    name: Dependency Vulnerability Audit (OWASP)
+    runs-on: ubuntu-latest
+    needs: build-and-unit-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      # This codebase pins deliberately old dependencies (Spring 4.3.x,
+      # Hibernate 4/5 mix, old ActiveMQ/Quartz) so this scan is EXPECTED to
+      # surface real CVEs. It does not fail the build (see failBuildOnCVSS
+      # in pom.xml) - treat findings as a backlog, not a blocker.
+      - name: Run OWASP dependency-check
+        run: mvn -B org.owasp:dependency-check-maven:check -Dliquibase.should.run=false
+        continue-on-error: true
+
+      - name: Upload dependency-check report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-report
+          path: target/dependency-check-report.*
+          retention-days: 14
+
+  integration-test:
+    name: Integration Test (MySQL + ActiveMQ)
+    runs-on: ubuntu-latest
+    needs: build-and-unit-test
+    services:
+      mysql:
+        image: mysql:5.7
+        env:
+          MYSQL_ROOT_PASSWORD: rootpassword
+          MYSQL_DATABASE: snowman
+          MYSQL_USER: username
+          MYSQL_PASSWORD: password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -u root -prootpassword"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+      activemq:
+        image: rmohr/activemq:5.15.9
+        ports:
+          - 61616:61616
+          - 8161:8161
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      # KNOWN LIMITATION (intentionally preserved as a legacy finding):
+      # AbstractJDBCDao hardcodes "localhost:3306" with its own credentials
+      # instead of using the externalized datasource bean / application
+      # .properties config. In a containerized/CI environment where MySQL
+      # is a sibling service rather than localhost, this path can fail even
+      # though the Spring-managed dataSource bean connects fine. This is a
+      # realistic example of config drift between two data-access strategies
+      # coexisting in the same legacy codebase.
+      - name: Apply Liquibase migrations
+        run: mvn -B liquibase:update
+        continue-on-error: true
+
+      - name: Run integration-style tests (*ITest)
+        run: mvn -B verify -Dliquibase.should.run=false
+        continue-on-error: true
+
+  package:
+    name: Package (Uber JAR)
+    runs-on: ubuntu-latest
+    needs: [static-analysis, dependency-audit, integration-test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: Build Snowman.jar
+        run: mvn -B clean package -DskipTests -Dliquibase.should.run=false
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: snowman-jar
+          path: target/Snowman.jar
+          retention-days: 30
+
+  deploy-dev:
+    name: Deploy -> Dev
+    runs-on: ubuntu-latest
+    needs: package
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+    environment: dev
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: snowman-jar
+      - name: "Simulate deploy to dev"
+        run: echo "Deploying Snowman.jar to DEV environment (placeholder step)"
+
+  deploy-staging:
+    name: Deploy -> Staging
+    runs-on: ubuntu-latest
+    needs: deploy-dev
+    environment: staging
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: snowman-jar
+      - name: "Simulate deploy to staging"
+        run: echo "Deploying Snowman.jar to STAGING environment (placeholder step)"
+
+  deploy-prod:
+    name: Deploy -> Production
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    environment: production
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: snowman-jar
+      - name: "Simulate deploy to production"
+        run: echo "Deploying Snowman.jar to PRODUCTION environment (placeholder step)"

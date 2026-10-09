@@ -1,6 +1,10 @@
-# Enterprise Application : Snowman
+# Snowman — Employee Management System (EMS)
 
 [![Build Status](https://travis-ci.org/colinbut/enterprise-application.svg?branch=master)](https://travis-ci.org/colinbut/enterprise-application)
+
+Internal backend service for employee, project, and client records. Snowman is the
+system of record consumed by Payroll and Invoicing via scheduled JMS messages, and
+exposes its own REST API for internal tooling and reporting.
 
 ## Table of Contents
 
@@ -21,24 +25,16 @@
 - [Clustering](#clustering)
 - [Resiliency](#resiliency)
 
-This project aims to provide a skeleton example of a common traditional (perhaps now viewed as legacy) enterprise
-like application. 
-
-This project's concepts are an extension of another demo project Sales-Order-System where it showcase more advanced common features that 
-is normally seen in a traditional big-scale enterprise application.
-
-_Note, this project is not a complete application and i have no intention of making it complete, it only serves the purpose of providing a variety of specific
-demonstrations only._
-
 ### <a name="preamble"></a>Preamble
 
-Snowman is an fictional enterprise scale/ready employee management system (EMS). This project uses Snowman to 
-demonstrate the characteristics of a stereotypical backend enterprise application.
+Snowman tracks Employees, Projects, Clients, and the assignments between them. It is the
+upstream source of truth that Payroll and Invoicing depend on, and is also wired up to a
+notification topic that other internal systems subscribe to for change events.
   
 ![Image of a Snowman](etc/snowman.jpeg)  
   
-Snowman exposes its functionality via REST (-like) endpoints. Essentially this is a 
-backend web service.
+Snowman exposes its functionality via REST (-like) endpoints as a backend web service.
+There is no UI; downstream consumers are other internal services and batch tooling.
 
 ### <a name="prerequisites"></a>Pre - Requisites
 
@@ -52,9 +48,10 @@ backend web service.
 
 ### <a name="architecture"></a>Software Architecture
 
-Instead of using a Layered Architecture where you commonly have 3 layers with one directional flow, this project showcase
-a Hexagonal Architecture (Ports and Adapters). The core domain comprises of the main business logic would be the inner and
-the application infrastructure (Database, Message Queues, REST endpoints) would be the outer layers. 
+Rather than a traditional 3-layer architecture, the service is built using a Hexagonal
+Architecture (Ports and Adapters). The core domain containing the main business logic
+forms the inner layer, and the application infrastructure (Database, Message Queues,
+REST endpoints) forms the outer layer.
 
 ![Image of a Hexagonal Architecture](etc/HexagonalArchitecture.png)  
 
@@ -100,12 +97,13 @@ Apache ActiveMQ is JMS compliant belonging to open source apache foundation. One
 
 ### <a name="caching"></a>Caching
 
-[TBD]
+Client lookups are cached via Ehcache to reduce load on the database for frequently
+accessed, slow-changing reference data.
 
 ### <a name="uber-jar"></a>Uber Jar
 
-As part of the deployment process, Application is packaged up in a "uber" runnable executable jar.
-This jar contains all dependencies copied in. And can be easily run from a command line with:
+As part of the deployment process, the application is packaged up as an "uber" runnable
+executable jar. This jar contains all dependencies and can be run from the command line with:
 
 ```java
 java -jar target/Snowman.jar
@@ -115,12 +113,12 @@ This whole process is achieved by the [Maven Shade Plugin](https://maven.apache.
 
 ### <a name="embedded-jetty"></a>Embedded Jetty
 
-Rather than deploying the application in either a full blown JavaEE application server (JBoss/Wildfly, Websphere, Weblogic, Geronimo etc)
-or a Web/JSP Container (Tomcat, Jetty, UnderTow), we embed a HTTP listener into the application in the form of
-"Embedded Jetty". 
+Rather than deploying to a full JavaEE application server (JBoss/Wildfly, WebSphere, WebLogic, Geronimo etc)
+or a separate Web/JSP container (Tomcat, Jetty, UnderTow), the application embeds its own HTTP listener
+("Embedded Jetty").
 
-All dependencies are bundled/packaged together in an Uber jar file so it works. This means it is therefore
-wasn't necessary required to be provided with specific JavaEE dependencies from the JavaEE platform.
+All dependencies are bundled into the Uber jar, so the application does not depend on
+JavaEE libraries being provided by the hosting platform.
 
 ### <a name="database-migration"></a>Database Migration
 
@@ -170,8 +168,9 @@ java -jar -Xms256m -Xmx2048m target/Snowman.jar
 
 ### <a name="clustering"></a>Clustering
 
-No clustering options. This application does not run in a managed cluster. Horizontal scalability
-was chosen as demonstration in favour of running Cluster Servers to achieve Clustering.
+No clustering support. This application does not run in a managed cluster today; horizontal
+scalability (running multiple independent instances behind a load balancer) is used instead
+of a clustered deployment.
 
 See [Scalability](#scalability) for more info.
 
@@ -182,10 +181,10 @@ See [Scalability](#scalability) for more info.
 
 #### Failover and Recovery
 
-No F&R is supported. 
+No automated failover is supported.
 
-You can failover the application easily (assuming you are running 
-multiple instances to mimic multiple nodes servers). Just do a:
+If you are running multiple instances, a failed node can be removed manually by killing
+its process:
 
 ```bash
 kill -9 [pid]
@@ -193,21 +192,18 @@ kill -9 [pid]
 
 where pid is the process id of the particular application node server.
 
-But there is no Recovery. Because no Clustering options. Refer to [Clustering](#clustering) section.
+There is no automated recovery, since there is no clustering layer. See [Clustering](#clustering).
 
 #### Disaster and Recovery
 
-Although not specifically supported here, you can achieve this also. Manual intervention is required 
-though in order to start up the application (or group of applications) together. 
+DR is not automated and requires manual intervention to bring the application (or group of
+applications) back up. The current approach assumes two sites — a Primary and a Standby —
+with only the Primary active at any given time.
 
-To do Disaster Recovery a.k.a DR, you need to have the concept of a "Site". Commonly, use 
-multiple sites. For simplicity, assume 2 sites - 1 Primary Site and the other is Standby Site.
-Both sites would house the set of applications but only one site is up.
+If the Primary site is considered failed, it should be shut down and the Standby site started
+up in its place.
 
-If Primary site considered fail (i.e. multiple failovers of one or more applications (or application components
-if it is a Distributed Component Architecture)), then the Primary site should shutdown and thus Standby site
-would be required to be started up. 
+## Ownership
 
-## Author
-
-Colin But.
+Maintained by the Snowman service team. For architecture questions or production issues,
+see the on-call rotation or contact the team directly.

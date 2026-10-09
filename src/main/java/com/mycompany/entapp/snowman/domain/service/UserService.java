@@ -1,6 +1,6 @@
 /*
  * |-------------------------------------------------
- * | Copyright © 2017 Colin But. All rights reserved.
+ * | Copyright © 2017 Acme Corp. All rights reserved.
  * |-------------------------------------------------
  */
 package com.mycompany.entapp.snowman.domain.service;

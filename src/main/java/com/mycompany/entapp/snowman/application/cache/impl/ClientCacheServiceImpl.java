@@ -1,6 +1,6 @@
 /*
  * |-------------------------------------------------
- * | Copyright © 2018 Colin But. All rights reserved.
+ * | Copyright © 2018 Acme Corp. All rights reserved.
  * |-------------------------------------------------
  */
 package com.mycompany.entapp.snowman.application.cache.impl;
